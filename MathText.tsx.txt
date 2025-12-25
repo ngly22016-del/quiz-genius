@@ -1,0 +1,24 @@
+
+import React, { useEffect, useRef } from 'react';
+
+declare const renderMathInElement: any;
+
+const MathText: React.FC<{ text: string; className?: string }> = ({ text, className = "" }) => {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (ref.current) {
+      try {
+        renderMathInElement(ref.current, {
+          delimiters: [
+            { left: '$$', right: '$$', display: true },
+            { left: '$', right: '$', display: false }
+          ],
+          throwOnError: false
+        });
+      } catch (e) {}
+    }
+  }, [text]);
+  return <div ref={ref} className={className} dangerouslySetInnerHTML={{ __html: text || '' }} />;
+};
+
+export default MathText;
