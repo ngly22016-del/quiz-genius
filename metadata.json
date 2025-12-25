@@ -1,0 +1,7 @@
+{
+  "name": "QuizGenius: AI Question Bank",
+  "description": "Enterprise-grade PDF to Question Bank converter with Google Form export and student analytics.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}

@@ -1,0 +1,520 @@
+
+import React, { useState, useEffect, useMemo } from 'react';
+// Fix: Removed non-existent SubTopic import to resolve TS error
+import { UserRole, User, Question, QuizAttempt, RegisteredUser, Year, Subject, Topic, QuizSet } from './types';
+import AdminPanel from './components/AdminPanel';
+import UserPanel from './components/UserPanel';
+import Layout from './components/Layout';
+import { db } from './services/dbService';
+
+const App: React.FC = () => {
+  const [user, setUser] = useState<User | null>(null);
+  const [registeredUsers, setRegisteredUsers] = useState<RegisteredUser[]>([]);
+  const [years, setYears] = useState<Year[]>([]);
+  const [subjects, setSubjects] = useState<Subject[]>([]);
+  const [topics, setTopics] = useState<Topic[]>([]);
+  const [questions, setQuestions] = useState<Question[]>([]);
+  const [quizSets, setQuizSets] = useState<QuizSet[]>([]);
+  const [attempts, setAttempts] = useState<QuizAttempt[]>([]);
+  
+  const [isLoading, setIsLoading] = useState(true);
+  const [loginInput, setLoginInput] = useState({ username: '', password: '', role: UserRole.STUDENT });
+  const [isRegisterMode, setIsRegisterMode] = useState(false);
+  const [isResetMode, setIsResetMode] = useState(false);
+  const [adminResetStep, setAdminResetStep] = useState<'request' | 'sent'>('request');
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  useEffect(() => {
+    const initApp = async () => {
+      try {
+        await db.init();
+        
+        const [storedUsers, storedQs, storedSets, storedAttempts, storedYears, storedSubjects, storedTopics] = await Promise.all([
+          db.getAll<RegisteredUser>('users'),
+          db.getAll<Question>('questions'),
+          db.getAll<QuizSet>('quizSets'),
+          db.getAll<QuizAttempt>('attempts'),
+          db.getCurriculum('years'),
+          db.getCurriculum('subjects'),
+          db.getCurriculum('topics'),
+        ]);
+
+        setRegisteredUsers(storedUsers);
+        setQuestions(storedQs);
+        setQuizSets(storedSets);
+        setAttempts(storedAttempts);
+        setYears(storedYears);
+        setSubjects(storedSubjects);
+        setTopics(storedTopics);
+
+        const savedUser = localStorage.getItem('quiz_user');
+        if (savedUser) setUser(JSON.parse(savedUser));
+        
+      } catch (err) {
+        console.error("Failed to initialize database", err);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    initApp();
+  }, []);
+
+  const hasAdmin = useMemo(() => registeredUsers.some(u => u.role === UserRole.ADMIN), [registeredUsers]);
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setSuccess(null);
+    setIsSubmitting(true);
+    const trimmedName = loginInput.username.trim();
+    if (!trimmedName || !loginInput.password) { 
+      setError("Please fill all fields."); 
+      setIsSubmitting(false); 
+      return; 
+    }
+
+    const existingUser = registeredUsers.find(u => u.username.toLowerCase() === trimmedName.toLowerCase());
+    
+    if (existingUser) {
+      if (existingUser.password !== loginInput.password) {
+        setError("Incorrect password.");
+        setIsSubmitting(false);
+        return;
+      }
+      if (existingUser.isActive === false) {
+        setError("Your account is pending administrator verification.");
+        setIsSubmitting(false);
+        return;
+      }
+      const sessionUser = { username: existingUser.username, role: existingUser.role };
+      setUser(sessionUser);
+      localStorage.setItem('quiz_user', JSON.stringify(sessionUser));
+    } else {
+      setError("User not found. Please register first.");
+    }
+    setIsSubmitting(false);
+  };
+
+  const handleRegister = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setSuccess(null);
+    setIsSubmitting(true);
+    const trimmedName = loginInput.username.trim();
+    
+    if (!trimmedName || !loginInput.password) {
+      setError("Username and password are required.");
+      setIsSubmitting(false);
+      return;
+    }
+
+    const existingUser = registeredUsers.find(u => u.username.toLowerCase() === trimmedName.toLowerCase());
+    if (existingUser) {
+      setError("Username already taken. Please choose another.");
+      setIsSubmitting(false);
+      return;
+    }
+
+    if (loginInput.role === UserRole.ADMIN && hasAdmin) {
+      setError("An administrator already exists. Only one admin is allowed.");
+      setIsSubmitting(false);
+      return;
+    }
+
+    const isStudent = loginInput.role === UserRole.STUDENT;
+    const newUser: RegisteredUser = { 
+      username: trimmedName, 
+      password: loginInput.password, 
+      role: loginInput.role, 
+      isActive: !isStudent 
+    };
+
+    try {
+      await db.save('users', newUser);
+      setRegisteredUsers(prev => [...prev, newUser]);
+      
+      if (isStudent) {
+        setSuccess("Registration successful! Please wait for an administrator to verify your account.");
+      } else {
+        setSuccess("Admin account created successfully! You can now sign in.");
+      }
+      
+      setIsRegisterMode(false);
+      setLoginInput(prev => ({ ...prev, password: '' }));
+    } catch (err) {
+      setError("Registration failed. Please try again.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handlePublicReset = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setSuccess(null);
+    setIsSubmitting(true);
+    const trimmedName = loginInput.username.trim();
+    
+    if (!trimmedName) {
+      setError("Username is required.");
+      setIsSubmitting(false);
+      return;
+    }
+
+    const existingUser = registeredUsers.find(u => u.username.toLowerCase() === trimmedName.toLowerCase());
+    if (!existingUser) {
+      setError("Account not found.");
+      setIsSubmitting(false);
+      return;
+    }
+
+    if (existingUser.role === UserRole.ADMIN) {
+      // Admin Gmail Reset Logic
+      setTimeout(() => {
+        setAdminResetStep('sent');
+        setSuccess("A password reset link has been dispatched to: ngly6926@gmail.com");
+        setIsSubmitting(false);
+      }, 1500);
+      return;
+    }
+
+    if (!loginInput.password) {
+      setError("New password is required for student reset.");
+      setIsSubmitting(false);
+      return;
+    }
+
+    // Student reset via login page makes account inactive
+    const updatedUser: RegisteredUser = { 
+      ...existingUser, 
+      password: loginInput.password,
+      isActive: false 
+    };
+
+    try {
+      await db.save('users', updatedUser);
+      setRegisteredUsers(prev => prev.map(u => u.username === updatedUser.username ? updatedUser : u));
+      setSuccess("Password updated. Account is now locked pending Administrator re-verification.");
+      setIsResetMode(false);
+      setLoginInput(prev => ({ ...prev, password: '' }));
+    } catch (err) {
+      setError("Failed to process reset request.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleLogout = () => {
+    setUser(null);
+    localStorage.removeItem('quiz_user');
+  };
+
+  const saveQuestion = async (q: Question) => {
+    await db.save('questions', q);
+    setQuestions(prev => {
+      const exists = prev.find(old => old.id === q.id);
+      return exists ? prev.map(old => old.id === q.id ? q : old) : [...prev, q];
+    });
+  };
+
+  const deleteQuestion = async (id: string) => {
+    await db.delete('questions', id);
+    setQuestions(prev => prev.filter(q => q.id !== id));
+  };
+
+  const addBatchQuestions = async (newQs: Question[]) => {
+    await Promise.all(newQs.map(q => db.save('questions', q)));
+    setQuestions(prev => [...prev, ...newQs]);
+  };
+
+  const handleAddQuizSet = async (name: string, description: string) => {
+    const newSet: QuizSet = { 
+      id: `set-${Date.now()}`, 
+      name, 
+      description, 
+      questionIds: [], 
+      createdAt: new Date().toISOString() 
+    };
+    await db.save('quizSets', newSet);
+    setQuizSets(prev => [...prev, newSet]);
+  };
+
+  const updateQuizSet = async (set: QuizSet) => {
+    await db.save('quizSets', set);
+    setQuizSets(prev => {
+      const exists = prev.find(old => old.id === set.id);
+      return exists ? prev.map(old => old.id === set.id ? set : old) : [...prev, set];
+    });
+  };
+
+  const deleteQuizSet = async (id: string) => {
+    await db.delete('quizSets', id);
+    setQuizSets(prev => prev.filter(s => s.id !== id));
+  };
+
+  const handleAddYear = async (n: string) => {
+    const newYears = [...years, { id: Date.now().toString(), name: n }];
+    await db.saveCurriculum('years', newYears);
+    setYears(newYears);
+  };
+
+  const handleAddSubject = async (n: string) => {
+    const newSubs = [...subjects, { id: Date.now().toString(), name: n }];
+    await db.saveCurriculum('subjects', newSubs);
+    setSubjects(newSubs);
+  };
+
+  const handleAddTopic = async (n: string) => {
+    const newTops = [...topics, { id: Date.now().toString(), name: n }];
+    await db.saveCurriculum('topics', newTops);
+    setTopics(newTops);
+  };
+
+  const handleAddStudent = async (u: RegisteredUser) => {
+    const studentUser = { ...u, role: UserRole.STUDENT };
+    await db.save('users', studentUser);
+    setRegisteredUsers(prev => [...prev, studentUser]);
+  };
+
+  const handleDeleteStudent = async (username: string) => {
+    await db.delete('users', username);
+    setRegisteredUsers(prev => prev.filter(u => u.username !== username));
+  };
+
+  const handleResetPassword = async (username: string, newPass: string) => {
+    const userToReset = registeredUsers.find(u => u.username === username);
+    if (userToReset) {
+      const updatedUser = { ...userToReset, password: newPass };
+      await db.save('users', updatedUser);
+      setRegisteredUsers(prev => prev.map(u => u.username === username ? updatedUser : u));
+    }
+  };
+
+  const handleToggleUserStatus = async (username: string) => {
+    const updatedUsers = registeredUsers.map(u => {
+      if (u.username === username) return { ...u, isActive: !u.isActive };
+      return u;
+    });
+    const userToUpdate = updatedUsers.find(u => u.username === username);
+    if (userToUpdate) await db.save('users', userToUpdate);
+    setRegisteredUsers(updatedUsers);
+  };
+
+  const handleRecordAttempt = async (att: QuizAttempt) => {
+    await db.save('attempts', att);
+    setAttempts(prev => [att, ...prev]);
+  };
+
+  const handleDeleteAttempt = async (id: string) => {
+    await db.delete('attempts', id);
+    setAttempts(prev => prev.filter(a => a.id !== id));
+  };
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center">
+        <div className="text-center space-y-4">
+          <div className="w-16 h-16 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
+          <p className="text-white font-black uppercase tracking-widest text-xs">Initializing Database...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+        <div className="bg-white p-8 md:p-10 rounded-[2.5rem] shadow-2xl w-full max-w-md border border-slate-100 animate-fadeIn">
+          <div className="text-center mb-10">
+            <div className="w-16 h-16 bg-indigo-600 rounded-2xl flex items-center justify-center text-white text-3xl font-bold mx-auto mb-4 shadow-lg shadow-indigo-100">Q</div>
+            <h1 className="text-3xl font-black text-slate-900 tracking-tighter">QuizGenius</h1>
+            <p className="text-sm text-slate-400 mt-2 font-medium">Educational Asset Management</p>
+          </div>
+
+          {!isResetMode && (
+            <div className="flex bg-slate-100 p-1.5 rounded-2xl mb-8">
+              <button 
+                onClick={() => { setIsRegisterMode(false); setError(null); setSuccess(null); }}
+                className={`flex-1 py-2.5 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all ${!isRegisterMode ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-400'}`}
+              >
+                Sign In
+              </button>
+              <button 
+                onClick={() => { 
+                  setIsRegisterMode(true); 
+                  setError(null); 
+                  setSuccess(null); 
+                  if (hasAdmin) setLoginInput(prev => ({ ...prev, role: UserRole.STUDENT }));
+                }}
+                className={`flex-1 py-2.5 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all ${isRegisterMode ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-400'}`}
+              >
+                Sign Up
+              </button>
+            </div>
+          )}
+
+          {isResetMode && (
+            <div className="mb-8 text-center">
+               <h2 className="text-xl font-black text-slate-900">Security Recovery</h2>
+               <p className="text-xs text-slate-400 mt-1">Select account type to begin recovery</p>
+            </div>
+          )}
+
+          <form onSubmit={isResetMode ? handlePublicReset : (isRegisterMode ? handleRegister : handleLogin)} className="space-y-5">
+            {error && <div className="p-4 bg-red-50 text-red-600 rounded-xl text-xs font-bold animate-shake">{error}</div>}
+            {success && <div className="p-4 bg-green-50 text-green-600 rounded-xl text-xs font-bold">{success}</div>}
+            
+            <div className="space-y-1">
+              <label className="text-[10px] font-black uppercase text-slate-400 ml-2 tracking-widest">Username</label>
+              <input 
+                type="text" 
+                placeholder="Enter username" 
+                className="w-full p-4 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-indigo-500 font-medium bg-slate-50/50" 
+                value={loginInput.username} 
+                onChange={e => setLoginInput({...loginInput, username: e.target.value})} 
+              />
+            </div>
+            
+            {/* Show password field only if not doing admin reset via Gmail */}
+            {!(isResetMode && loginInput.role === UserRole.ADMIN && adminResetStep === 'request') && (
+              <div className="space-y-1">
+                <label className="text-[10px] font-black uppercase text-slate-400 ml-2 tracking-widest">
+                  {isResetMode ? 'New Password' : 'Password'}
+                </label>
+                <input 
+                  type="password" 
+                  placeholder="••••••••" 
+                  className="w-full p-4 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-indigo-500 font-medium bg-slate-50/50" 
+                  value={loginInput.password} 
+                  onChange={e => setLoginInput({...loginInput, password: e.target.value})} 
+                />
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 gap-2">
+              <button 
+                type="button" 
+                onClick={() => setLoginInput({...loginInput, role: UserRole.STUDENT})} 
+                className={`p-3 rounded-xl border-2 font-black text-[10px] uppercase tracking-widest transition-all ${loginInput.role === UserRole.STUDENT ? 'border-indigo-600 bg-indigo-50 text-indigo-700' : 'text-slate-500 border-slate-100'}`}
+              >
+                Student
+              </button>
+              {(!isRegisterMode || !hasAdmin) && (
+                <button 
+                  type="button" 
+                  onClick={() => setLoginInput({...loginInput, role: UserRole.ADMIN})} 
+                  className={`p-3 rounded-xl border-2 font-black text-[10px] uppercase tracking-widest transition-all ${loginInput.role === UserRole.ADMIN ? 'border-indigo-600 bg-indigo-50 text-indigo-700' : 'text-slate-500 border-slate-100'}`}
+                >
+                  Admin
+                </button>
+              )}
+            </div>
+
+            <button type="submit" disabled={isSubmitting} className="w-full bg-slate-900 text-white p-5 rounded-xl font-black text-xs uppercase tracking-[0.2em] shadow-xl disabled:opacity-50 transition-all active:scale-95 hover:bg-slate-800">
+              {isSubmitting ? 
+                (isResetMode ? 'PROCESSING...' : (isRegisterMode ? 'CREATING...' : 'SIGNING IN...')) : 
+                (isResetMode ? (loginInput.role === UserRole.ADMIN ? 'SEND RESET GMAIL' : 'REQUEST STUDENT RESET') : (isRegisterMode ? 'CREATE ACCOUNT' : 'SECURE SIGN IN'))
+              }
+            </button>
+          </form>
+          
+          <div className="flex flex-col gap-4 mt-8 items-center">
+            {!isResetMode && (
+              <p className="text-center text-xs font-medium text-slate-400">
+                {isRegisterMode ? "Already have an account?" : "Don't have an account?"}
+                <button 
+                  onClick={() => { setIsRegisterMode(!isRegisterMode); setError(null); setSuccess(null); }}
+                  className="ml-2 text-indigo-600 font-bold hover:underline"
+                >
+                  {isRegisterMode ? "Sign in instead" : "Sign up here"}
+                </button>
+              </p>
+            )}
+            
+            <button 
+              onClick={() => { 
+                setIsResetMode(!isResetMode); 
+                setIsRegisterMode(false); 
+                setAdminResetStep('request');
+                setError(null); 
+                setSuccess(null); 
+              }}
+              className="text-xs font-bold text-slate-400 hover:text-indigo-600 transition-colors"
+            >
+              {isResetMode ? "Back to Login" : "Forgot Password?"}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <Layout 
+      user={user} 
+      onLogout={handleLogout} 
+      onResetPassword={(newPass) => handleResetPassword(user.username, newPass)}
+    >
+      {user.role === UserRole.ADMIN ? (
+        <AdminPanel 
+          questions={questions} 
+          years={years}
+          subjects={subjects}
+          topics={topics}
+          subTopics={[]}
+          quizSets={quizSets}
+          registeredUsers={registeredUsers}
+          attempts={attempts}
+          onAddQuizSet={handleAddQuizSet}
+          onUpdateQuizSet={updateQuizSet}
+          onDeleteQuizSet={deleteQuizSet}
+          onAddYear={handleAddYear}
+          onUpdateYear={() => {}}
+          onDeleteYear={() => {}}
+          onAddSubject={handleAddSubject}
+          onUpdateSubject={() => {}}
+          onDeleteSubject={() => {}}
+          onAddTopic={handleAddTopic}
+          onUpdateTopic={() => {}}
+          onDeleteTopic={() => {}}
+          onAddSubTopic={() => {}}
+          onDeleteSubTopic={() => {}}
+          onAddQuestions={addBatchQuestions} 
+          onUpdateQuestion={saveQuestion}
+          onDeleteQuestion={deleteQuestion}
+          onDeleteTopicQuestions={() => {}} 
+          onToggleUserStatus={handleToggleUserStatus}
+          onAddStudent={handleAddStudent}
+          onDeleteStudent={handleDeleteStudent}
+          onResetPassword={handleResetPassword}
+          onDeleteAttempt={handleDeleteAttempt}
+          onRecordAttempt={handleRecordAttempt}
+        />
+      ) : (
+        <UserPanel 
+          user={user} 
+          questions={questions} 
+          years={years}
+          subjects={subjects}
+          topics={topics}
+          quizSets={quizSets}
+          attempts={attempts} 
+          onRecordAttempt={handleRecordAttempt} 
+        />
+      )}
+      <style>{`
+        @keyframes shake {
+          0%, 100% { transform: translateX(0); }
+          25% { transform: translateX(-5px); }
+          75% { transform: translateX(5px); }
+        }
+        .animate-shake { animation: shake 0.2s ease-in-out 0s 2; }
+      `}</style>
+    </Layout>
+  );
+};
+
+export default App;
